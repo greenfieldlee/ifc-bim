@@ -1,27 +1,35 @@
 <template>
   <div id="app">
     <h1>IFC Viewer</h1>
-    <AppIFCViewer :URL="ifcFileUrl" :fileName="ifcFileName" />
+    <!-- <IFCGeometryTiler />
+    <IFCPropertiesTiler /> -->
+    <AppIFCStreamingViewer
+      :geometryURL="geometryURL"
+      :propertiesURL="propertiesURL"
+      id="viewer"
+    />
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue'
-import AppIFCViewer from './components/AppIFCViewer.vue'
+import { Component, Vue } from 'vue-facing-decorator';
+import AppIFCStreamingViewer from './components/AppIFCStreamingViewer.vue';
+import IFCGeometryTiler from './components/IFCGeometryTiler.vue';
+import IFCPropertiesTiler from './components/IFCPropertiesTiler.vue';
 
-export default defineComponent({
-  name: 'App',
+@Component({
   components: {
-    AppIFCViewer
-  },
-  data() {
-    return {
-      // ifcFileUrl: './DC_Riverside-STRUC-LOD_300.ifc',
-      ifcFileUrl: './test-1.ifc',
-      ifcFileName: 'example.ifc'
-    }
+    AppIFCStreamingViewer,
+    IFCGeometryTiler,
+    IFCPropertiesTiler
   }
 })
+export default class App extends Vue {
+  // geometryURL = 'http://thatopen.github.io/engine_components/resources/streaming/small.ifc-processed.json';
+  // propertiesURL = 'https://thatopen.github.io/engine_components/resources/streaming/small.ifc-processed-properties.json';
+  geometryURL = 'http://localhost:8080/ifc-processed.json';
+  propertiesURL = 'http://localhost:8080/ifc-processed-properties.json';
+}
 </script>
 
 <style>
@@ -32,5 +40,10 @@ export default defineComponent({
   text-align: center;
   color: #2c3e50;
   margin-top: 60px;
+  height: 100vh;
+}
+
+#viewer {
+  height: 80vh;
 }
 </style>
