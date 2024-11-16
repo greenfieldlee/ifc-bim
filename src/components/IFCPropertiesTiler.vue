@@ -83,7 +83,7 @@
   
     propsStreamer.onIndicesStreamed.add(async (props) => {
       files.push({
-        name: `ifc-processed-properties.json`,
+        name: `ifc-processed-properties`,
         bits: new Blob([JSON.stringify(jsonFile)]),
       });
   

@@ -1,62 +1,147 @@
 <template>
-    <div class="ifc-tile-converter">
-      <h2>IFC Tile Converter</h2>
-      <input type="file" @change="handleFileSelect" accept=".ifc" />
-      <button @click="convertToTiles" :disabled="!selectedFile">Convert to Tiles</button>
-      <div v-if="conversionProgress > 0 && conversionProgress < 1">
-        Conversion Progress: {{ (conversionProgress * 100).toFixed(2) }}%
+    <div class="combined-ifc-tiler">
+      <h1 class="text-2xl font-bold mb-4">Combined IFC Tiler</h1>
+      <div class="mb-4">
+        <input type="file" @change="handleFileSelect" accept=".ifc" class="block w-full text-sm text-gray-500
+          file:mr-4 file:py-2 file:px-4
+          file:rounded-full file:border-0
+          file:text-sm file:font-semibold
+          file:bg-violet-50 file:text-violet-700
+          hover:file:bg-violet-100
+        " aria-label="Select IFC file"/>
+        <button @click="processIFC" :disabled="!selectedFile || isProcessing" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50 disabled:cursor-not-allowed">
+          {{ isProcessing ? 'Processing...' : 'Generate Tiles' }}
+        </button>
       </div>
-      <div v-if="conversionComplete">
-        Conversion complete. Files are ready for download.
+      <div v-if="processingStatus" class="mt-4 p-4 bg-gray-100 rounded">
+        <h2 class="font-semibold mb-2">Processing Status:</h2>
+        <pre class="text-sm">{{ processingStatus }}</pre>
       </div>
     </div>
   </template>
   
   <script setup lang="ts">
-  import { ref, onMounted, defineExpose } from 'vue';
-  import * as OBC from '@thatopen/components';
+  import { ref, onMounted } from 'vue';
+  import * as OBC from "@thatopen/components";
+  import * as THREE from 'three';
   
-  interface GeometryData {
-    geometries: { [key: string]: any };
-    assets: OBC.StreamedAsset[];
-  }
-  
-  interface PropertyData {
-    types: { [typeID: number]: number[] };
-    ids: { [id: number]: number };
+  interface StreamedProperties {
+    types: {
+      [typeID: number]: number[];
+    };
+    ids: {
+      [id: number]: number;
+    };
     indexesFile: string;
-    properties: { [id: string]: any };
   }
   
   const selectedFile = ref<File | null>(null);
-  const conversionProgress = ref(0);
-  const conversionComplete = ref(false);
-  const components = ref<OBC.Components | null>(null);
-  const geometryTiler = ref<OBC.IfcGeometryTiler | null>(null);
-  const propertyTiler = ref<OBC.IfcPropertiesTiler | null>(null);
+  const isProcessing = ref(false);
+  const processingStatus = ref('');
+  
+  const components = new OBC.Components();
+  const geometryTiler = components.get(OBC.IfcGeometryTiler);
+  const propertyTiler = components.get(OBC.IfcPropertiesTiler);
+  
+  let geometryFiles: { name: string; bits: (Uint8Array | string)[] }[] = [];
+  let propertyFiles: { name: string; bits: Blob }[] = [];
+  let geometriesData: OBC.StreamedGeometries = {};
+  let assetsData: OBC.StreamedAsset[] = [];
+  let geometryFilesCount = 1;
+  let propertyCounter = 0;
+  
+  const propertyJsonFile: StreamedProperties = {
+    types: {},
+    ids: {},
+    indexesFile: "ifc-processed-properties-indexes",
+  };
   
   onMounted(() => {
-    components.value = new OBC.Components();
-    geometryTiler.value = components.value.get(OBC.IfcGeometryTiler);
-    propertyTiler.value = components.value.get(OBC.IfcPropertiesTiler);
-    initializeTilers();
+    setupTilers();
   });
   
-  const initializeTilers = () => {
+  const setupTilers = () => {
     const wasmSettings = {
       path: "https://unpkg.com/web-ifc@0.0.57/",
       absolute: true,
     };
   
-    if (geometryTiler.value) {
-      geometryTiler.value.settings.wasm = wasmSettings;
-      geometryTiler.value.settings.minGeometrySize = 20;
-      geometryTiler.value.settings.minAssetsSize = 1000;
-    }
+    // Setup Geometry Tiler
+    geometryTiler.settings.wasm = wasmSettings;
+    geometryTiler.settings.minGeometrySize = 20;
+    geometryTiler.settings.minAssetsSize = 1000;
   
-    if (propertyTiler.value) {
-      propertyTiler.value.settings.wasm = wasmSettings;
-    }
+    geometryTiler.onGeometryStreamed.add(async (geometry) => {
+      const { buffer, data } = geometry;
+      const bufferFileName = `ifc-processed-geometries-${geometryFilesCount}`;
+      for (const expressID in data) {
+        const value = data[expressID];
+        value.geometryFile = bufferFileName;
+        geometriesData[expressID] = value;
+      }
+      geometryFiles.push({ name: bufferFileName, bits: [buffer] });
+      geometryFilesCount++;
+      processingStatus.value += `\nGeometry chunk ${geometryFilesCount - 1} processed`;
+    });
+  
+    geometryTiler.onAssetStreamed.add(async (assets) => {
+      assetsData = [...assetsData, ...assets];
+      processingStatus.value += `\n${assets.length} geometry assets processed`;
+    });
+  
+    geometryTiler.onIfcLoaded.add(async (groupBuffer) => {
+      geometryFiles.push({
+        name: "ifc-processed-global",
+        bits: [groupBuffer],
+      });
+      processingStatus.value += '\nGlobal geometry data processed';
+    });
+  
+    geometryTiler.onProgress.add(async (progress) => {
+      processingStatus.value = `Geometry Processing: ${Math.round(progress * 100)}%`;
+    });
+  
+    // Setup Property Tiler
+    propertyTiler.settings.wasm = wasmSettings;
+  
+    propertyTiler.onPropertiesStreamed.add(async (props) => {
+      if (!propertyJsonFile.types[props.type]) {
+        propertyJsonFile.types[props.type] = [];
+      }
+      propertyJsonFile.types[props.type].push(propertyCounter);
+  
+      for (const id in props.data) {
+        propertyJsonFile.ids[id] = propertyCounter;
+      }
+  
+      const name = `ifc-processed-properties-${propertyCounter}`;
+      const bits = new Blob([JSON.stringify(props.data)]);
+      propertyFiles.push({ bits, name });
+  
+      propertyCounter++;
+      processingStatus.value += `\nProperty chunk ${propertyCounter} processed`;
+    });
+  
+    propertyTiler.onProgress.add(async (progress) => {
+      processingStatus.value = `Property Processing: ${Math.round(progress * 100)}%`;
+    });
+  
+    propertyTiler.onIndicesStreamed.add(async (props) => {
+      propertyFiles.push({
+        name: `ifc-processed-properties`,
+        bits: new Blob([JSON.stringify(propertyJsonFile)]),
+      });
+  
+      const relations = components.get(OBC.IfcRelationsIndexer);
+      const serializedRels = relations.serializeRelations(props);
+  
+      propertyFiles.push({
+        name: "ifc-processed-properties-indexes",
+        bits: new Blob([serializedRels]),
+      });
+  
+      processingStatus.value += '\nProperty processing complete';
+    });
   };
   
   const handleFileSelect = (event: Event) => {
@@ -66,137 +151,72 @@
     }
   };
   
-  const downloadFile = (name: string, content: string) => {
-    const blob = new Blob([content], { type: 'application/json' });
+  const processIFC = async () => {
+    if (!selectedFile.value) return;
+  
+    isProcessing.value = true;
+    processingStatus.value = 'Starting IFC processing...';
+  
+    try {
+      const ifcBuffer = await selectedFile.value.arrayBuffer();
+      const ifcArrayBuffer = new Uint8Array(ifcBuffer);
+  
+      processingStatus.value += '\nProcessing geometry...';
+      await geometryTiler.streamFromBuffer(ifcArrayBuffer);
+  
+      processingStatus.value += '\nProcessing properties...';
+      await propertyTiler.streamFromBuffer(ifcArrayBuffer);
+  
+      processingStatus.value += '\nGenerating final geometry data...';
+      const processedGeometryData = {
+        geometries: geometriesData,
+        assets: assetsData,
+        globalDataFileId: "ifc-processed-global",
+      };
+      geometryFiles.push({
+        name: "ifc-processed.json",
+        bits: [JSON.stringify(processedGeometryData)],
+      });
+  
+      processingStatus.value += '\nDownloading files...';
+      await downloadFilesSequentially([...geometryFiles, ...propertyFiles]);
+      
+      processingStatus.value += '\nProcessing complete. All files downloaded.';
+    } catch (error: any) {
+      processingStatus.value += `\nError: ${error.message}`;
+    } finally {
+      isProcessing.value = false;
+      resetState();
+    }
+  };
+  
+  const downloadFile = (name: string, bits: Blob | (Uint8Array | string)[]) => {
+    const blob = bits instanceof Blob ? bits : new Blob(bits, { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
     URL.revokeObjectURL(url);
   };
   
-  const convertToTiles = async () => {
-    if (!selectedFile.value) return;
-  
-    const ifcBuffer = await selectedFile.value.arrayBuffer();
-    const ifcArrayBuffer = new Uint8Array(ifcBuffer);
-  
-    await convertGeometry(ifcArrayBuffer);
-    await convertProperties(ifcArrayBuffer);
-  
-    conversionComplete.value = true;
-    conversionProgress.value = 0;
-  };
-  
-  const convertGeometry = async (ifcArrayBuffer: Uint8Array): Promise<void> => {
-    let currentGeometryFile: GeometryData = { geometries: {}, assets: [] };
-    let fileCounter = 0;
-  
-    if (geometryTiler.value) {
-      geometryTiler.value.onGeometryStreamed.add(async (data: { buffer: Uint8Array; data: OBC.StreamedGeometries }) => {
-        const { data: geometryItems } = data;
-        for (const expressID in geometryItems) {
-          if (Object.prototype.hasOwnProperty.call(geometryItems, expressID)) {
-            currentGeometryFile.geometries[expressID] = geometryItems[expressID];
-          }
-        }
-  
-        // If the current file size exceeds a threshold, save it and start a new one
-        if (JSON.stringify(currentGeometryFile).length > 1000000) { // 1MB threshold
-          downloadFile(`${selectedFile.value!.name}-geometry-${fileCounter}.json`, JSON.stringify(currentGeometryFile));
-          currentGeometryFile = { geometries: {}, assets: [] };
-          fileCounter++;
-        }
+  const downloadFilesSequentially = async (fileList: { name: string; bits: Blob | (Uint8Array | string)[] }[]) => {
+    for (const { name, bits } of fileList) {
+      downloadFile(name, bits);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
       });
-  
-      geometryTiler.value.onAssetStreamed.add(async (assets: OBC.StreamedAsset[]) => {
-        currentGeometryFile.assets.push(...assets);
-      });
-  
-      geometryTiler.value.onIfcLoaded.add(async (data: any) => {
-        downloadFile(`${selectedFile.value!.name}-global-data.json`, JSON.stringify(data));
-      });
-  
-      geometryTiler.value.onProgress.add(async (progress: number) => {
-        conversionProgress.value = progress / 2;
-      });
-  
-      await geometryTiler.value.streamFromBuffer(ifcArrayBuffer);
-  
-      // Save any remaining geometry data
-      if (Object.keys(currentGeometryFile.geometries).length > 0 || currentGeometryFile.assets.length > 0) {
-        downloadFile(`${selectedFile.value!.name}-geometry-${fileCounter}.json`, JSON.stringify(currentGeometryFile));
-      }
     }
   };
   
-  const convertProperties = async (ifcArrayBuffer: Uint8Array): Promise<void> => {
-    const propertyData: PropertyData = {
-      types: {},
-      ids: {},
-      indexesFile: `${selectedFile.value!.name}-processed-properties-indexes.json`,
-      properties: {},
-    };
-  
-    if (propertyTiler.value) {
-      propertyTiler.value.onPropertiesStreamed.add(async (props: any) => {
-        if (!propertyData.types[props.type]) {
-          propertyData.types[props.type] = [];
-        }
-        propertyData.types[props.type].push(Object.keys(propertyData.properties).length);
-  
-        for (const id in props.data) {
-          if (Object.prototype.hasOwnProperty.call(props.data, id)) {
-            propertyData.ids[Number(id)] = Object.keys(propertyData.properties).length;
-            propertyData.properties[id] = props.data[id];
-          }
-        }
-      });
-  
-      propertyTiler.value.onIndicesStreamed.add(async (props: any) => {
-        const relations = components.value!.get(OBC.IfcRelationsIndexer);
-        const serializedRels = relations.serializeRelations(props);
-        propertyData.indexesFile = JSON.stringify(serializedRels);
-      });
-  
-      propertyTiler.value.onProgress.add(async (progress: number) => {
-        conversionProgress.value = 0.5 + progress / 2;
-      });
-  
-      await propertyTiler.value.streamFromBuffer(ifcArrayBuffer);
-  
-      downloadFile(`${selectedFile.value!.name}-properties.json`, JSON.stringify(propertyData));
-    }
+  const resetState = () => {
+    geometryFiles = [];
+    propertyFiles = [];
+    geometriesData = {};
+    assetsData = [];
+    geometryFilesCount = 1;
+    propertyCounter = 0;
+    propertyJsonFile.types = {};
+    propertyJsonFile.ids = {};
   };
-  
-  defineExpose({
-    convertToTiles,
-    conversionProgress,
-    conversionComplete
-  });
   </script>
-  
-  <style scoped>
-  .ifc-tile-converter {
-    padding: 20px;
-    border: 1px solid #ccc;
-    border-radius: 5px;
-    margin-bottom: 20px;
-  }
-  
-  button {
-    margin-top: 10px;
-    padding: 5px 10px;
-    background-color: #4CAF50;
-    color: white;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-  }
-  
-  button:disabled {
-    background-color: #cccccc;
-    cursor: not-allowed;
-  }
-  </style>
