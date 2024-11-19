@@ -35,16 +35,20 @@ function debounceRAF(func: (...args: any[]) => void): (...args: any[]) => void {
 
 @Component
 class AppIFCStreamingViewer extends Vue {
+    @Prop({ default: '', type: String }) baseURL!: string;
     @Prop({ default: '', type: String }) geometryURL!: string;
     @Prop({ default: '', type: String }) propertiesURL!: string;
     world?: OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer>;
     resizeHandler?: (...args: any[]) => void;
+    loader?: OBCF.IfcStreamer;
+    classificationWorker?: Worker;
 
     async mounted() {
         BUI.Manager.init();
         const viewport = document.createElement('bim-viewport');
         const container = document.getElementById('ifc-container');
         const components = new OBC.Components();
+        let model: any = null;
 
         if (container) {
             const worlds = components.get(OBC.Worlds);
@@ -97,11 +101,15 @@ class AppIFCStreamingViewer extends Vue {
             // Set up IFC Streamer
             const loader = components.get(OBCF.IfcStreamer);
             loader.world = world;
-            loader.url = "http://localhost:8080/"; // Set this to your backend URL if needed
+            loader.url = this.baseURL; // Set this to your backend URL if needed
+            loader.culler.threshold = 50;
+            loader.culler.maxHiddenTime = 1000;
+            loader.culler.maxLostTime = 3000;
+            loader.useCache = true;
+            this.loader = loader;
 
             // Load the model if URLs are provided
             if (this.geometryURL && this.propertiesURL) {
-
                 try {
                     const rawGeometryData = await fetch(this.geometryURL);
                     if (!rawGeometryData.ok) {
@@ -116,36 +124,67 @@ class AppIFCStreamingViewer extends Vue {
                     const propertiesData = await rawPropertiesData.json();
 
                     console.log('geometryData', geometryData);
-                    console.log('propertiesData', propertiesData);
-                    const model = await loader.load(geometryData, true, propertiesData);
-                    console.log("Model loaded:", model);
+                    console.log('propertiesData', propertiesData)
 
+                    const tLoader = components.get(OBCF.IfcStreamer);
+                    tLoader.world = world;
+                    tLoader.url = this.baseURL; // Set this to your backend URL if needed
+                    tLoader.culler.threshold = 2000;
+                    tLoader.culler.maxHiddenTime = 1000;
+                    tLoader.culler.maxLostTime = 3000;
+                    tLoader.useCache = true;
+
+                    model = await tLoader.load(geometryData, true, propertiesData);
+                    // console.log("model loaded:", model);
+                } catch (error) {
+                    console.error('Error loading IFC model:', error);
+                }
+            }
+
+            world.camera.controls.addEventListener("sleep", () => {
+                if (this.loader != undefined) {
+                    this.loader.culler.needsUpdate = true;
+                }
+            });
+
+            if (model != null) {
+                await new Promise((resolve: any) => setTimeout(() => {
+                    console.time('Loading model properties Time');
                     // Update classifications after model is loaded
+                    classifier.byModel(model.uuid, model);
+
+                    console.log('model', model)
+
                     classifier.byEntity(model);
-                    await classifier.byPredefinedType(model);
                     const classifications = [
                         { system: 'entities', label: 'Entities' },
                         { system: 'predefinedTypes', label: 'Predefined Types' }
                     ];
+
                     updateClassificationsTree({ classifications });
-                } catch (error) {
-                    console.error('Error loading IFC model:', error);
-                }
 
+                    // classifier.byPredefinedType(model).then(() => {
+                    //     console.timeEnd('Loading model properties Time');
+
+                    //     const classifications = [
+                    //         { system: 'entities', label: 'Entities' },
+                    //         { system: 'predefinedTypes', label: 'Predefined Types' }
+                    //     ];
+
+                    //     updateClassificationsTree({ classifications });
+                    // });
+                    resolve();
+                }, 0));
             }
-
-            world.camera.controls.addEventListener("sleep", () => {
-                loader.culler.needsUpdate = true;
-            });
 
             const panel = BUI.Component.create(() => {
                 return BUI.html`
-            <bim-panel label="Classifications Tree">
-              <bim-panel-section label="Classifications">
-                ${classificationsTree}
-              </bim-panel-section>
-            </bim-panel>
-          `;
+                        <bim-panel label="Classifications Tree">
+                        <bim-panel-section label="Classifications">
+                            ${classificationsTree}
+                        </bim-panel-section>
+                        </bim-panel>
+                `;
             });
 
             const app = document.createElement('bim-grid');
@@ -170,6 +209,16 @@ class AppIFCStreamingViewer extends Vue {
         const viewport = document.querySelector('bim-viewport');
         if (viewport && this.resizeHandler) {
             viewport.removeEventListener('resize', this.resizeHandler);
+        }
+        if (this.classificationWorker) {
+            this.classificationWorker.terminate();
+        }
+    }
+
+    async clearCache() {
+        if (this.loader) {
+        await this.loader.clearCache();
+        window.location.reload();
         }
     }
 }

@@ -1,212 +1,153 @@
 <template>
-  <div>
-    <div id="ifc-container" class="h-full"></div>
+  <div id="ifc-container" class="h-full" aria-label="IFC Model Viewer">
+    <!-- The IFC model will be rendered here -->
   </div>
 </template>
 
-<script lang="ts">
-import { Component, Prop, toNative, Vue } from 'vue-facing-decorator';
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, watch, defineProps } from 'vue';
 import * as OBC from '@thatopen/components';
 import * as BUI from '@thatopen/ui';
 import * as CUI from '@thatopen/ui-obc';
-import { Group, Object3D, AmbientLight, DirectionalLight } from 'three';
 
-function debounceRAF(func: (...args: any[]) => void): (...args: any[]) => void {
-  let rafId: number | null = null;
-  let lastArgs: any[] | null = null;
+const props = defineProps({
+  URL: { type: String, default: '' },
+  fileName: { type: String, default: '' }
+});
 
-  return (...args: any[]) => {
-    lastArgs = args;
+const world = ref<OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer> | null>(null);
+let resizeObserver: ResizeObserver | null = null;
 
-    if (rafId) {
-      return;
-    }
+const initializeWorld = () => {
+  BUI.Manager.init();
+  const viewport = document.createElement('bim-viewport');
+  viewport.setAttribute('aria-label', 'IFC Model Viewport');
+  const container = document.getElementById('ifc-container');
+  const components = new OBC.Components();
 
-    rafId = requestAnimationFrame(() => {
-      if (lastArgs) {
-        func(...lastArgs);
-      }
-      rafId = null;
-      lastArgs = null;
-    });
-  };
-}
+  if (container) {
+    const worlds = components.get(OBC.Worlds);
+    const newWorld = worlds.create<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer>();
+    newWorld.scene = new OBC.SimpleScene(components);
+    newWorld.renderer = new OBC.SimpleRenderer(components, viewport);
+    newWorld.camera = new OBC.SimpleCamera(components);
 
-@Component
-class AppIFCViewer extends Vue {
-  @Prop({ default: '', type: String }) URL!: string;
-  @Prop({ default: '', type: String }) fileName!: string;
-  world?: OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer>;
-  resizeHandler?: (...args: any[]) => void;
+    components.init();
+    newWorld.camera.controls.setLookAt(12, 6, 8, 0, 0, -10);
+    newWorld.scene.setup();
 
-  async mounted() {
-    BUI.Manager.init();
-    const viewport = document.createElement('bim-viewport');
-    const container = document.getElementById('ifc-container');
-    const components = new OBC.Components();
+    const classifier = components.get(OBC.Classifier);
+    const cullers = components.get(OBC.Cullers);
+    const culler = cullers.create(newWorld);
+    culler.config.threshold = 200;
+    culler.needsUpdate = true;
 
-    if (container) {
-      const worlds = components.get(OBC.Worlds);
-      const world = worlds.create<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer>();
-      world.scene = new OBC.SimpleScene(components);
-      world.renderer = new OBC.SimpleRenderer(components, viewport);
-
-      // Initialize the camera
-      world.camera = new OBC.SimpleCamera(components);
-      console.log('Camera initialized:', world.camera);
-
-      this.resizeHandler = debounceRAF(() => {
-        if (world.renderer && world.camera) {
-          world.renderer.resize();
-          world.camera.updateAspect();
-        }
-      });
-
-      viewport.addEventListener('resize', this.resizeHandler);
-
-      components.init();
-      world.camera.controls.setLookAt(12, 6, 8, 0, 0, -10);
-      world.scene.setup();
-
-      // Add lighting
-      const ambientLight = new AmbientLight(0xffffff, 0.5);
-      world.scene.three.add(ambientLight);
-
-      const directionalLight = new DirectionalLight(0xffffff, 1);
-      directionalLight.position.set(10, 10, 10);
-      world.scene.three.add(directionalLight);
-
-      const classifier = components.get(OBC.Classifier);
-      const cullers = components.get(OBC.Cullers);
-      const culler = cullers.create(world);
-      culler.config.threshold = 900;
+    newWorld.camera.controls.addEventListener('controlend', () => {
       culler.needsUpdate = true;
-
-      world.camera.controls.addEventListener('controlend', () => {
-        culler.needsUpdate = true;
-      });
-
-      const grids = components.get(OBC.Grids);
-      grids.create(world);
-
-      const [classificationsTree, updateClassificationsTree] = CUI.tables.classificationTree({
-        components,
-        classifications: []
-      });
-
-      const fragmentsManager = components.get(OBC.FragmentsManager);
-      fragmentsManager.onFragmentsLoaded.add(async (model: any) => {
-        console.log('Fragments loaded:', model);
-        classifier.byEntity(model);
-        await classifier.byPredefinedType(model);
-        const classifications = [
-          { system: 'entities', label: 'Entities' },
-          { system: 'predefinedTypes', label: 'Predefined Types' }
-        ];
-        updateClassificationsTree({ classifications });
-      });
-
-      const fragmentIfcLoader = components.get(OBC.IfcLoader);
-      fragmentIfcLoader.settings.wasm = {
-        path: 'https://unpkg.com/web-ifc@0.0.61/',
-        absolute: true
-      };
-      fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true;
-      (fragmentIfcLoader.settings.webIfc as any).OPTIMIZE_PROFILES = true;
-
-      if (this.URL) {
-        const file = await fetch(this.URL);
-        if (file) {
-          try {
-
-            const data = await file.arrayBuffer();
-            const buffer = new Uint8Array(data);
-            const model = await fragmentIfcLoader.load(buffer);
-            world.scene.three.add(model);
-            // console.log('model -> ', model)
-            
-            
-            // Create and set up the worker
-            // const worker = new Worker(new URL('./ifc-worker.ts', import.meta.url), { type: 'module' });
-            // worker.postMessage({ data: buffer, wasmPath: 'https://unpkg.com/web-ifc@0.0.61/'});
-
-            // worker.onmessage = (event) => {
-            //   console.log('onmessage', event.data);
-            //   // const { model, error } = event.data;
-            //   const { error } = event.data;
-            //   if (error) {
-            //     console.error('Error loading IFC model:', error);
-            //   } else {
-            //     const threeModel = this.reconstructThreeObject(model);
-            //     console.log('preparing...');
-            //     world.scene.three.add(threeModel);
-            //     console.log('finish...');
-            //   }
-            // };
-          } catch (error) {
-            console.error('Error fetching IFC file:', error);
-          }
-
-          const panel = BUI.Component.create(() => {
-            return BUI.html`
-              <bim-panel label="Classifications Tree">
-                <bim-panel-section label="Classifications">
-                  ${classificationsTree}
-                </bim-panel-section>
-              </bim-panel>
-            `;
-          });
-
-          const app = document.createElement('bim-grid');
-          app.layouts = {
-            main: {
-              template: `
-                "panel viewport"
-                / 23rem 1fr
-              `,
-              elements: { panel, viewport }
-            }
-          };
-          app.layout = 'main';
-          container.append(app);
-          this.world = world;
-        }
-      }
-    }
-  }
-
-  reconstructThreeObject(data: any): Object3D {
-    const group = new Group();
-    group.uuid = data.uuid;
-    group.name = data.name;
-
-    data.children.forEach((childData: any) => {
-      const child = new Object3D(); // Or a more specific type if needed
-      child.uuid = childData.uuid;
-      child.name = childData.name;
-      // Reconstruct geometry and material if needed
-      if (childData.geometry) {
-        // Reconstruct geometry
-      }
-      if (childData.material) {
-        // Reconstruct material
-      }
-      group.add(child);
     });
 
-    return group;
-  }
+    const grids = components.get(OBC.Grids);
+    grids.create(newWorld);
 
-  unmounted() {
-    this.world?.dispose();
-    const viewport = document.querySelector('bim-viewport');
-    if (viewport && this.resizeHandler) {
-      viewport.removeEventListener('resize', this.resizeHandler);
+    const fragmentIfcLoader = components.get(OBC.IfcLoader);
+    fragmentIfcLoader.settings.wasm = {
+      path: 'https://unpkg.com/web-ifc@0.0.61/',
+      absolute: true
+    };
+    fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true;
+    (fragmentIfcLoader.settings.webIfc as any).OPTIMIZE_PROFILES = true;
+
+    const [classificationsTree, updateClassificationsTree] = CUI.tables.classificationTree({
+      components,
+      classifications: []
+    });
+
+    // const fragmentsManager = components.get(OBC.FragmentsManager);
+    // fragmentsManager.onFragmentsLoaded.add((model: any) => {
+    //   classifier.byEntity(model);
+    //   classifier.byPredefinedType(model).then(() => {
+    //     console.timeEnd('Loading model properties Time');
+    //     const classifications = [
+    //       { system: 'entities', label: 'Entities' },
+    //       { system: 'predefinedTypes', label: 'Predefined Types' }
+    //     ];
+    //     updateClassificationsTree({ classifications });
+    //   });
+    // });
+
+    if (props.URL) {
+      fetch(props.URL)
+        .then(response => response.arrayBuffer())
+        .then(data => {
+          const buffer = new Uint8Array(data);
+          return fragmentIfcLoader.load(buffer);
+        })
+        .then(model => {
+          newWorld.scene.three.add(model);
+        })
+        .catch(error => {
+          console.error('Error loading IFC model:', error);
+        });
+
+      const panel = BUI.Component.create(() => {
+        return BUI.html`
+          <bim-panel label="Classifications Tree">
+            <bim-panel-section label="Classifications">
+              ${classificationsTree}
+            </bim-panel-section>
+          </bim-panel>
+        `;
+      });
+
+      const app = document.createElement('bim-grid');
+      app.setAttribute('role', 'application');
+      app.setAttribute('aria-label', 'IFC Model Viewer Application');
+      app.layouts = {
+        main: {
+          template: `
+            "panel viewport"
+            / 23rem 1fr
+          `,
+          elements: { panel, viewport }
+        }
+      };
+      app.layout = 'main';
+      container.append(app);
     }
-  }
-}
 
-export default toNative(AppIFCViewer);
+    world.value = newWorld;
+
+    // Set up ResizeObserver
+    resizeObserver = new ResizeObserver(
+      debounce(() => {
+        if (newWorld.renderer && newWorld.camera) {
+          newWorld.renderer.resize();
+          newWorld.camera.updateAspect();
+        }
+      }, 100)
+    );
+    resizeObserver.observe(viewport);
+  }
+};
+
+const debounce = (func: any, wait: number) => {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  return (...args: any[]) => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+};
+
+onMounted(initializeWorld);
+
+onUnmounted(() => {
+  world.value?.dispose();
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+});
+
+watch(() => props.URL, initializeWorld);
 </script>
 
 <style scoped>
