@@ -1,7 +1,7 @@
 <template>
   <div id="app">
-    <!-- <IFCTileConverter /> -->
-    <!-- <AppIFCStreamingViewer
+    <!-- <IFCTileConverter />
+    <AppIFCStreamingViewer
       :baseURL="baseURL"
       :geometryURL="geometryURL"
       :propertiesURL="propertiesURL"
