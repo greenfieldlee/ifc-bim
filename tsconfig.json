@@ -16,7 +16,9 @@
     "types": [
       "vite/client",
       "three",
-      "webworker"
+      "webworker",
+      "node",
+      "vue"
     ],
     "paths": {
       "@/*": [
