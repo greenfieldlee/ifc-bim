@@ -3,12 +3,13 @@
     <div id="ifc-container" class="h-full" aria-label="IFC Model Viewer">
       <!-- The IFC model will be rendered here -->
     </div>
-    <div v-if="loading" class="loading-overlay">
-      <div class="loading-spinner"></div>
+    <div v-if="loading" class="loading-overlay" aria-live="polite">
+      <div class="loading-spinner" role="progressbar" aria-valuetext="Loading"></div>
       <p>Loading IFC Model...</p>
     </div>
-    <!-- <button @click="loadModel" :disabled="loading" class="load-button">
-      {{ loading ? 'Loading...' : 'Load IFC Model' }}
+
+    <!-- <button @click="loadPredefined" :disabled="loading" class="load-button">
+      {{ loading ? 'Loading...' : 'Load Predefinded Model' }}
     </button> -->
   </div>
 </template>
@@ -18,9 +19,10 @@ import { ref, onMounted, onUnmounted, watch, defineProps } from 'vue';
 import * as OBC from '@thatopen/components';
 import * as BUI from '@thatopen/ui';
 import * as CUI from '@thatopen/ui-obc';
+import * as FRAGS from "@thatopen/fragments";
 
 const props = defineProps({
-  URL: { type: String, default: '' },
+  URL: { type: String, required: true },
   fileName: { type: String, default: '' }
 });
 
@@ -28,6 +30,8 @@ const world = ref<OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleR
 let resizeObserver: ResizeObserver | null = null;
 const loading = ref(false);
 let updateClassificationsTree: (arg: { classifications: any[] }) => void;
+let model: FRAGS.FragmentsGroup;
+let classifier: OBC.Classifier;
 
 const initializeWorld = () => {
   BUI.Manager.init();
@@ -47,7 +51,6 @@ const initializeWorld = () => {
     newWorld.camera.controls.setLookAt(12, 6, 8, 0, 0, -10);
     newWorld.scene.setup();
 
-    const classifier = components.get(OBC.Classifier);
     const cullers = components.get(OBC.Cullers);
     const culler = cullers.create(newWorld);
     culler.config.threshold = 200;
@@ -73,7 +76,6 @@ const initializeWorld = () => {
       classifications: []
     });
 
-    // Assign the updateClassificationsTree function to the outer scope
     updateClassificationsTree = updateClassificationsTreeFunc;
 
     const panel = BUI.Component.create(() => {
@@ -103,7 +105,6 @@ const initializeWorld = () => {
 
     world.value = newWorld;
 
-    // Set up ResizeObserver
     resizeObserver = new ResizeObserver(
       debounce(() => {
         if (newWorld.renderer && newWorld.camera) {
@@ -125,50 +126,38 @@ const loadModel = async () => {
     const response = await fetch(props.URL);
     const data = await response.arrayBuffer();
     const buffer = new Uint8Array(data);
-    const model = await fragmentIfcLoader.load(buffer);
+    model = await fragmentIfcLoader.load(buffer);
     world.value.scene.three.add(model);
 
-    const fragmentsManager = world.value.components.get(OBC.FragmentsManager);
-    const classifier = world.value.components.get(OBC.Classifier);
+    classifier = world.value.components.get(OBC.Classifier);
 
     classifier.byModel(model.uuid, model);
-      classifier.byEntity(model);
+    classifier.byEntity(model);
 
-      const classifications = [
-        { system: 'entities', label: 'Entities' },
-        { system: 'predefinedTypes', label: 'Predefined Types' }
-      ];
+    const classifications = [
+      { system: 'entities', label: 'Entities' },
+      { system: 'predefinedTypes', label: 'Predefined Types' },
+    ];
 
-      updateClassificationsTree({ classifications });
-
-    fragmentsManager.onFragmentsLoaded.add((model: any) => {
-      classifier.byModel(model.uuid, model);
-      classifier.byEntity(model);
-
-      const classifications = [
-        { system: 'entities', label: 'Entities' },
-        { system: 'predefinedTypes', label: 'Predefined Types' }
-      ];
-
-      updateClassificationsTree({ classifications });
-      // classifier.byPredefinedType(model).then(() => {
-      //   console.timeEnd('Loading model properties Time');
-      //   classifier.byModel(model.uuid, model);
-
-      //   console.log('model', model);
-      //   const classifications = [
-      //     { system: 'entities', label: 'Entities' },
-      //     { system: 'predefinedTypes', label: 'Predefined Types' }
-      //   ];
-
-      //   updateClassificationsTree({ classifications });
-      // });
-    });
-
+    updateClassificationsTree({ classifications });
   } catch (error) {
     console.error('Error loading IFC model:', error);
   } finally {
     loading.value = false;
+  }
+};
+
+const cleanupMemory = () => {
+  if (world.value) {
+    const fragmentManager = world.value.components.get(OBC.FragmentsManager);
+    fragmentManager.dispose();
+  }
+  if (model) {
+    model.dispose();
+  }
+  // Force garbage collection if available
+  if (typeof global !== 'undefined' && global.gc) {
+    global.gc();
   }
 };
 
@@ -187,13 +176,14 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  cleanupMemory();
   world.value?.dispose();
   if (resizeObserver) {
     resizeObserver.disconnect();
   }
 });
 
-watch(() => props.URL, initializeWorld);
+watch(() => props.URL, loadModel);
 </script>
 
 <style scoped>
@@ -233,13 +223,8 @@ watch(() => props.URL, initializeWorld);
 }
 
 @keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-
-  100% {
-    transform: rotate(360deg);
-  }
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .load-button {
@@ -258,5 +243,16 @@ watch(() => props.URL, initializeWorld);
 .load-button:disabled {
   background-color: #95a5a6;
   cursor: not-allowed;
+}
+
+.classification-progress {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 10px;
+  border-radius: 5px;
+  font-size: 14px;
 }
 </style>
