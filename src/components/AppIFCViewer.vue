@@ -34,6 +34,8 @@ const loading = ref(false);
 const selectedElement = ref(null);
 let model: FRAGS.FragmentsGroup;
 let ifcData: any;
+let highlighter: OBF.Highlighter;
+let relationsTree: any;
 
 const initializeWorld = () => {
   BUI.Manager.init();
@@ -73,20 +75,44 @@ const initializeWorld = () => {
     fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true;
     (fragmentIfcLoader.settings.webIfc as any).OPTIMIZE_PROFILES = true;
 
-    const highlighter = components.get(OBF.Highlighter);
+    const [tree, setRelationsTree] = CUI.tables.relationsTree({
+      components,
+      models: [],
+    });
+
+    relationsTree = tree;
+    relationsTree.preserveStructureOnFilter = true;
+
+    highlighter = components.get(OBF.Highlighter);
     highlighter.setup({ world: newWorld });
+    highlighter.zoomToSelection = true;
 
     highlighter.events.select.onHighlight.add((selection: any) => {
       if (Object.keys(selection).length > 0) {
         const firstKey = Object.keys(selection)[0];
         const expressID = selection[firstKey].values().next().value;
         console.log('expressID : ', expressID)
-        console.log('ifcData', ifcData)
         const elementData = ifcData.find((item: any) => item.expressID === expressID);
         selectedElement.value = elementData;
       } else {
         selectedElement.value = null;
       }
+    });
+
+    const panel = BUI.Component.create(() => {
+      const onSearch = (e: Event) => {
+        const input = e.target as BUI.TextInput;
+        relationsTree.queryString = input.value;
+      };
+
+      return BUI.html`
+      <bim-panel label="Relations Tree">
+        <bim-panel-section label="Model Tree">
+          <bim-text-input @input=${onSearch} placeholder="Search..." debounce="200"></bim-text-input>
+          ${relationsTree}
+        </bim-panel-section>
+      </bim-panel> 
+      `;
     });
 
     const app = document.createElement('bim-grid');
@@ -95,10 +121,10 @@ const initializeWorld = () => {
     app.layouts = {
       main: {
         template: `
-          "viewport"
-          / 1fr
+          "panel viewport"
+          / 30rem 1fr
         `,
-        elements: { viewport }
+        elements: { panel, viewport }
       }
     };
     app.layout = 'main';
@@ -139,6 +165,16 @@ const loadModel = async () => {
 
     ifcData = Array.isArray(rawIfcData) ? rawIfcData : Object.values(rawIfcData);
 
+    // Update the relationsTree with the loaded model
+    if (relationsTree) {
+      relationsTree.models = [model];
+      relationsTree.update();
+    }
+
+    // Set up event listener for relationsTree selection
+    relationsTree.onSelected = (expressID: number) => {
+      // highlighter.highlightByID("select", model.id, [expressID]);
+    };
 
   } catch (error) {
     console.error('Error loading IFC model:', error);
@@ -223,8 +259,13 @@ watch(() => props.URL, loadModel);
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .element-properties {
