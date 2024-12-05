@@ -7,10 +7,10 @@
       <div class="loading-spinner" role="progressbar" aria-valuetext="Loading"></div>
       <p>Loading IFC Model...</p>
     </div>
-
-    <!-- <button @click="loadPredefined" :disabled="loading" class="load-button">
-      {{ loading ? 'Loading...' : 'Load Predefinded Model' }}
-    </button> -->
+    <div v-if="selectedElement" class="element-properties">
+      <h2>Element Properties</h2>
+      <pre>{{ JSON.stringify(selectedElement, null, 2) }}</pre>
+    </div>
   </div>
 </template>
 
@@ -20,18 +20,20 @@ import * as OBC from '@thatopen/components';
 import * as BUI from '@thatopen/ui';
 import * as CUI from '@thatopen/ui-obc';
 import * as FRAGS from "@thatopen/fragments";
+import * as OBF from "@thatopen/components-front";
 
 const props = defineProps({
   URL: { type: String, required: true },
+  META: { type: String, required: true },
   fileName: { type: String, default: '' }
 });
 
 const world = ref<OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer> | null>(null);
 let resizeObserver: ResizeObserver | null = null;
 const loading = ref(false);
-let updateClassificationsTree: (arg: { classifications: any[] }) => void;
+const selectedElement = ref(null);
 let model: FRAGS.FragmentsGroup;
-let classifier: OBC.Classifier;
+let ifcData: any;
 
 const initializeWorld = () => {
   BUI.Manager.init();
@@ -71,21 +73,20 @@ const initializeWorld = () => {
     fragmentIfcLoader.settings.webIfc.COORDINATE_TO_ORIGIN = true;
     (fragmentIfcLoader.settings.webIfc as any).OPTIMIZE_PROFILES = true;
 
-    const [classificationsTree, updateClassificationsTreeFunc] = CUI.tables.classificationTree({
-      components,
-      classifications: []
-    });
+    const highlighter = components.get(OBF.Highlighter);
+    highlighter.setup({ world: newWorld });
 
-    updateClassificationsTree = updateClassificationsTreeFunc;
-
-    const panel = BUI.Component.create(() => {
-      return BUI.html`
-        <bim-panel label="Classifications Tree">
-          <bim-panel-section label="Classifications">
-            ${classificationsTree}
-          </bim-panel-section>
-        </bim-panel>
-      `;
+    highlighter.events.select.onHighlight.add((selection: any) => {
+      if (Object.keys(selection).length > 0) {
+        const firstKey = Object.keys(selection)[0];
+        const expressID = selection[firstKey].values().next().value;
+        console.log('expressID : ', expressID)
+        console.log('ifcData', ifcData)
+        const elementData = ifcData.find((item: any) => item.expressID === expressID);
+        selectedElement.value = elementData;
+      } else {
+        selectedElement.value = null;
+      }
     });
 
     const app = document.createElement('bim-grid');
@@ -94,10 +95,10 @@ const initializeWorld = () => {
     app.layouts = {
       main: {
         template: `
-          "panel viewport"
-          / 23rem 1fr
+          "viewport"
+          / 1fr
         `,
-        elements: { panel, viewport }
+        elements: { viewport }
       }
     };
     app.layout = 'main';
@@ -129,17 +130,16 @@ const loadModel = async () => {
     model = await fragmentIfcLoader.load(buffer);
     world.value.scene.three.add(model);
 
-    classifier = world.value.components.get(OBC.Classifier);
+    const indexer = world.value.components.get(OBC.IfcRelationsIndexer);
+    await indexer.process(model);
 
-    classifier.byModel(model.uuid, model);
-    classifier.byEntity(model);
+    // Load IFC data
+    const ifcResponse = await fetch(props.META);
+    const rawIfcData = await ifcResponse.json();
 
-    const classifications = [
-      { system: 'entities', label: 'Entities' },
-      { system: 'predefinedTypes', label: 'Predefined Types' },
-    ];
+    ifcData = Array.isArray(rawIfcData) ? rawIfcData : Object.values(rawIfcData);
 
-    updateClassificationsTree({ classifications });
+
   } catch (error) {
     console.error('Error loading IFC model:', error);
   } finally {
@@ -227,32 +227,16 @@ watch(() => props.URL, loadModel);
   100% { transform: rotate(360deg); }
 }
 
-.load-button {
+.element-properties {
   position: absolute;
   top: 20px;
   right: 20px;
-  padding: 10px 20px;
-  background-color: #3498db;
-  color: white;
-  border: none;
+  background-color: rgba(255, 255, 255, 0.9);
+  padding: 20px;
   border-radius: 5px;
-  cursor: pointer;
-  font-size: 1rem;
-}
-
-.load-button:disabled {
-  background-color: #95a5a6;
-  cursor: not-allowed;
-}
-
-.classification-progress {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 10px;
-  border-radius: 5px;
-  font-size: 14px;
+  max-width: 300px;
+  max-height: 80%;
+  overflow-y: auto;
+  text-align: left;
 }
 </style>

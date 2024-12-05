@@ -1,16 +1,22 @@
 <template>
   <div id="app">
-    <AppIFCViewer :URL="'http://localhost:8080/small.ifc'" />
+    <!-- <IfcRelationsDownloader /> -->
+     <!-- <IfcJsonExporter /> -->
+    <AppIFCViewer :URL="'http://localhost:8080/small.ifc'" :META="'http://localhost:8080/properties.json'" />
   </div>
 </template>
 
 <script lang="ts">
 import { Component, Vue } from 'vue-facing-decorator';
 import AppIFCViewer from './components/AppIFCViewer.vue';
+import IfcRelationsDownloader from './components/IfcRelationsDownloader.vue'
+import IfcJsonExporter from './components/IfcJsonExporter.vue'
 
 @Component({
   components: {
-    AppIFCViewer
+    AppIFCViewer,
+    IfcRelationsDownloader,
+    IfcJsonExporter
   }
 })
 export default class App extends Vue {
