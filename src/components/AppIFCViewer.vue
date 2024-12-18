@@ -11,6 +11,12 @@
       <h2>Element Properties</h2>
       <pre>{{ JSON.stringify(selectedElement, null, 2) }}</pre>
     </div>
+
+    <!-- Button to trigger highlighting -->
+    <button class="highlight-button" @click="handleHighlightButtonClick" :disabled="!world || !highlighter">
+      Highlight Element
+    </button>
+
   </div>
 </template>
 
@@ -19,13 +25,15 @@ import { ref, onMounted, onUnmounted, watch, defineProps } from 'vue';
 import * as OBC from '@thatopen/components';
 import * as BUI from '@thatopen/ui';
 import * as CUI from '@thatopen/ui-obc';
+import * as THREE from "three";
 import * as FRAGS from "@thatopen/fragments";
 import * as OBF from "@thatopen/components-front";
 
 const props = defineProps({
   URL: { type: String, required: true },
   META: { type: String, required: true },
-  fileName: { type: String, default: '' }
+  fileName: { type: String, default: '' },
+  highlighId: { type: Number, required: true }
 });
 
 const world = ref<OBC.SimpleWorld<OBC.SimpleScene, OBC.SimpleCamera, OBC.SimpleRenderer> | null>(null);
@@ -90,10 +98,11 @@ const initializeWorld = () => {
     highlighter.events.select.onHighlight.add((selection: any) => {
       if (Object.keys(selection).length > 0) {
         const firstKey = Object.keys(selection)[0];
-        const expressID = selection[firstKey].values().next().value;
+        const expressID = parseInt(selection[firstKey].values().next().value);
         console.log('expressID : ', expressID)
         const elementData = ifcData.find((item: any) => item.expressID === expressID);
         selectedElement.value = elementData;
+
       } else {
         selectedElement.value = null;
       }
@@ -172,16 +181,93 @@ const loadModel = async () => {
     }
 
     // Set up event listener for relationsTree selection
-    relationsTree.onSelected = (expressID: number) => {
-      // highlighter.highlightByID("select", model.id, [expressID]);
-    };
-
   } catch (error) {
     console.error('Error loading IFC model:', error);
   } finally {
     loading.value = false;
   }
 };
+
+const handleHighlightButtonClick = () => {
+  const sampleExpressID = props.highlighId; // Replace with a valid expressID from your data
+  highlightByExpressID(sampleExpressID);
+};
+
+const highlightByExpressID = (expressID: number) => {
+  if (!highlighter || !model) {
+    console.warn("Highlighter or model not initialized");
+    return;
+  }
+
+  highlighter.zoomToSelection = true;
+
+  try {
+    const fragmentIdMap: any = {
+      highlight: new Set([expressID]),
+    };
+
+    highlighter.events.select.onHighlight.trigger(fragmentIdMap);
+
+    relationsTree.queryString = expressID;
+
+    setTimeout(() => {
+      const rootElement = document.querySelector('bim-table'); // Starting element
+      if (!rootElement) {
+        console.error('Root element not found');
+      } else {
+        const selectors = [
+          'bim-table-children',
+          'bim-table-group',
+          'bim-table-children',
+          'bim-table-group',
+          'bim-table-children',
+          'bim-table-group',
+          'bim-table-children',
+          'bim-table-group',
+          'bim-table-row'
+        ]; // Sequence of selectors through the shadow DOM hierarchy
+
+        const targetElement = traverseShadowDOM(rootElement, selectors);
+
+        if (targetElement) {
+          console.log('Found target element:', targetElement);
+          targetElement.click()
+        } else {
+          console.error('Target element not found');
+        }
+      }
+    }, 500);
+
+  } catch (error) {
+    console.error("Error during highlighting:", error);
+  }
+};
+
+/**
+ * Recursively traverse shadow DOM hierarchy to find the target element.
+ * @param {Element} root - The starting root element.
+ * @param {string[]} selectors - Array of selectors to traverse through shadow roots.
+ * @returns {Element | null} - The found element or null if not found.
+ */
+const traverseShadowDOM = (root: any, selectors: any) => {
+  if (!root || selectors.length === 0) return null;
+
+  // Get the first selector in the array
+  const currentSelector = selectors[0];
+
+  // Query the current element's shadow root
+  const shadowRoot = root.shadowRoot;
+  const nextElement = shadowRoot?.querySelector(currentSelector);
+
+  // If we find the target element, return it
+  if (selectors.length === 1) {
+    return nextElement || null;
+  }
+
+  // Otherwise, continue recursively with the remaining selectors
+  return traverseShadowDOM(nextElement, selectors.slice(1));
+};
+
 
 const cleanupMemory = () => {
   if (world.value) {
@@ -279,5 +365,24 @@ watch(() => props.URL, loadModel);
   max-height: 80%;
   overflow-y: auto;
   text-align: left;
+}
+
+.highlight-button {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  padding: 10px 20px;
+  background-color: #3498db;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  font-size: 1rem;
+  cursor: pointer;
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+  transition: background-color 0.3s;
+}
+
+.highlight-button:hover {
+  background-color: #2980b9;
 }
 </style>
