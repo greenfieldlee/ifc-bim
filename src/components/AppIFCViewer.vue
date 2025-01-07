@@ -23,6 +23,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, defineProps } from 'vue';
 import * as OBC from '@thatopen/components';
+import * as OBCF from "@thatopen/components-front";
 import * as BUI from '@thatopen/ui';
 import * as CUI from '@thatopen/ui-obc';
 import * as THREE from "three";
@@ -92,7 +93,7 @@ const initializeWorld = () => {
     relationsTree.preserveStructureOnFilter = true;
 
     highlighter = components.get(OBF.Highlighter);
-    highlighter.setup({ world: newWorld });
+    highlighter.setup({ world: newWorld, selectionColor: new THREE.Color(0xf0ff0f) });
     highlighter.zoomToSelection = true;
 
     highlighter.events.select.onHighlight.add((selection: any) => {
@@ -102,10 +103,10 @@ const initializeWorld = () => {
         console.log('expressID : ', expressID)
         const elementData = ifcData.find((item: any) => item.expressID === expressID);
         selectedElement.value = elementData;
-
       } else {
         selectedElement.value = null;
       }
+
     });
 
     const panel = BUI.Component.create(() => {
@@ -194,55 +195,88 @@ const handleHighlightButtonClick = () => {
 };
 
 const highlightByExpressID = (expressID: number) => {
-  if (!highlighter || !model) {
-    console.warn("Highlighter or model not initialized");
+  if (!highlighter || !model || !world.value) {
+    console.warn("Highlighter, model, or world not initialized");
     return;
   }
 
   highlighter.zoomToSelection = true;
 
   try {
-    const fragmentIdMap: any = {
-      highlight: new Set([expressID]),
-    };
+    // Iterate over keyFragments to find the fragment and mesh with the matching expressID
+    model.items.forEach((fragment, key) => {
+      const id: number = Array.from(fragment.ids)[0];
+      if (id.toString() == expressID.toString()) {
+        const mesh = fragment.mesh;
+        console.log('mesh', mesh)
+        console.log('fragment', fragment)
+        const boundingBox = new THREE.Box3().setFromObject(mesh);
 
-    highlighter.events.select.onHighlight.trigger(fragmentIdMap);
+        // Compute the center and size of the bounding box
+        const center = boundingBox.getCenter(new THREE.Vector3());
+        const size = boundingBox.getSize(new THREE.Vector3());
 
-    relationsTree.queryString = expressID;
+        // Set the camera position to frame the bounding box
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const distance = maxDim * 0.5; // Adjust multiplier for better framing
 
-    setTimeout(() => {
-      const rootElement = document.querySelector('bim-table'); // Starting element
-      if (!rootElement) {
-        console.error('Root element not found');
-      } else {
-        const selectors = [
-          'bim-table-children',
-          'bim-table-group',
-          'bim-table-children',
-          'bim-table-group',
-          'bim-table-children',
-          'bim-table-group',
-          'bim-table-children',
-          'bim-table-group',
-          'bim-table-row'
-        ]; // Sequence of selectors through the shadow DOM hierarchy
+        world.value?.camera.controls.setLookAt(
+          center.x + distance,
+          center.y + distance,
+          center.z + distance,
+          center.x,
+          center.y,
+          center.z,
+          true // Smooth animation
+        );
 
-        const targetElement = traverseShadowDOM(rootElement, selectors);
+        // Trigger highlight event directly
+        const fragmentIdMap: any = {
+          [fragment.id]: new Set([expressID]), // Use computed property name
+        };
+        highlighter.events.select.onHighlight.trigger(fragmentIdMap);
 
-        if (targetElement) {
-          console.log('Found target element:', targetElement);
-          targetElement.click()
-
-        } else {
-          console.error('Target element not found');
-        }
+        changeFragmentColor(fragment.id, 0xf0ff0f)
       }
-    }, 500);
-
+    });
   } catch (error) {
-    console.error("Error during highlighting:", error);
+    console.error("Error during highlight and zoom:", error);
   }
 };
+
+const changeFragmentColor = (fragmentId: string, color: number) => {
+  model.items.forEach((fragment) => {
+    if (fragment.id === fragmentId) {
+      const mesh = fragment.mesh;
+      if (mesh) {
+        // Check if the mesh has a single material or multiple materials
+        if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map((mat) => {
+            const clonedMaterial: any = mat.clone(); // Clone the material
+            if (clonedMaterial.color) {
+              clonedMaterial.color.set(color); // Set the new color
+            }
+            return clonedMaterial;
+          });
+        } else {
+          const clonedMaterial: any = mesh.material; // Clone the material
+          if (clonedMaterial.color) {
+            clonedMaterial.color.set(color); // Set the new color
+          }
+          mesh.material = clonedMaterial; // Apply the cloned material
+        }
+
+        console.log(`Changed color of fragment ${fragmentId} to ${color}`);
+      } else {
+        console.warn(`Mesh not found for fragment ${fragmentId}`);
+      }
+    }
+  });
+
+  // Trigger scene matrix update to ensure rendering loop detects the change
+  world.value?.scene.three.updateMatrixWorld(true);
+};
+
 
 /**
  * Recursively traverse shadow DOM hierarchy to find the target element.
