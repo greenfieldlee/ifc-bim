@@ -232,6 +232,7 @@ const highlightByExpressID = (expressID: number) => {
         if (targetElement) {
           console.log('Found target element:', targetElement);
           targetElement.click()
+
         } else {
           console.error('Target element not found');
         }
